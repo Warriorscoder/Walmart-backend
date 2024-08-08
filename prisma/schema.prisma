@@ -1,0 +1,109 @@
+// Define the datasource and generator
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// Define the Gender enum
+enum Gender {
+  MALE
+  FEMALE
+  PREFER_NOT_TO_SAY
+}
+
+enum SaleType {
+  BUY
+  SALE
+}
+
+// Define the Customer model
+model Customer {
+  customerId String    @id @default(uuid())
+  gender     Gender
+  name       String
+  email      String    @unique
+  password   String
+  sales      Sale[]
+  products   Product[] // Add this line
+
+  @@map("customers")
+}
+
+// // Define the CompetitorPrice model
+model CompetitorPrice {
+  competitorPriceId String  @id @default(uuid())
+  productId         String
+  product           Product @relation(fields: [productId], references: [productId])
+  companyName       String  @unique
+  price             Float
+  freight           Float
+  customerRating    Float?
+}
+
+// // Define the Sale model
+model Product {
+  productId        String            @id @default(uuid())
+  productName      String
+  description      String
+  costPrice        Float
+  sellingPrice     Float
+  offerPrice       Float
+  expiry           DateTime
+  batchId          String
+  manufactureDate  DateTime
+  categoryName     String
+  weight           Float
+  images           String[]
+  customerRating   Float?
+  offerPercentage  Float?            @default(0)
+  quantity         Float
+  priceHistory     PriceHistory[]
+  competitorPrices CompetitorPrice[]
+  salesDetails     SalesDetail[]
+  customerId       String
+  customer         Customer          @relation(fields: [customerId], references: [customerId]) // Add this line
+
+  @@index([categoryName], name: "idx_product_category")
+}
+
+model PriceHistory {
+  id        String   @id @default(uuid())
+  price     Float
+  date      DateTime
+  productId String
+  product   Product  @relation(fields: [productId], references: [productId])
+}
+
+model Sale {
+  saleId             String        @id @default(uuid())
+  totalAmount        Float
+  userId             String
+  cumulativeDiscount Float
+  freightPrice       Float
+  storeId            String
+  address            String
+  customerId         String
+  customer           Customer      @relation(fields: [customerId], references: [customerId])
+  saleDate           DateTime
+  paymentType        String
+  saleType           SaleType
+  salesDetails       SalesDetail[]
+
+  @@index([saleDate], name: "idx_sale_date")
+  @@map("sales")
+}
+
+model SalesDetail {
+  salesDetailId String  @id @default(uuid())
+  saleId        String
+  sale          Sale    @relation(fields: [saleId], references: [saleId])
+  productId     String
+  product       Product @relation(fields: [productId], references: [productId])
+  sellingPrice  Float
+  quantitySold  Int
+  // saleTimestamp  DateTime
+}
