@@ -9,6 +9,8 @@ import jwt from "jsonwebtoken";
 import createApolloGraphqlServer from "./graphql";
 import cookieParser from "cookie-parser";
 import authenticateToken from "./graphql/userAuth";
+import { verify } from 'jsonwebtoken';
+
 
 export const jwtsecret = process.env.JWT_SECRET as string;
 async function init() {
@@ -30,14 +32,16 @@ async function init() {
     "/graphql",
     expressMiddleware(gqlServer, {
       context: async ({ req, res }) => {
-        const token = req.cookies.token;
+        // Extract token from Authorization header
+        const authHeader = req.headers.authorization || '';
+        const token = authHeader.replace('Bearer ', '');
         let user = null;
   
         if (token) {
           try {
-            user = jwt.verify(token, jwtsecret);
+            user = verify(token, jwtsecret);
           } catch (err) {
-            console.error("Invalid token");
+            console.error("Invalid token", err);
           }
         }
   

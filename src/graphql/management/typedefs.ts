@@ -7,14 +7,16 @@ input SalesDetailInput {
   type AuthPayload {
       token: String!
       message: String!
+      user:Customer
     }
-    type customerPayload {
+type customerPayload {
   token: String!
   message: String!
   customer: Customer!  # Correct field name
 }
     type TokenValidationResponse {
   valid: Boolean!
+  user:Customer!
   message: String!
 }
     enum Gender {
@@ -27,6 +29,8 @@ input SalesDetailInput {
   BUY
   SALE
 }
+
+
 
   type Customer {
     customerId: String!

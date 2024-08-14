@@ -4,23 +4,24 @@ import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
 import { SaleType as PrismaSaleType } from "@prisma/client";
 
+// Hash the password asynchronously
 async function hashPassword(plainPassword: string) {
   const saltRounds = 10;
-  const salt = await bcrypt.genSaltSync(saltRounds);
-  const hash = await bcrypt.hashSync(plainPassword, salt);
+  const salt = await bcrypt.genSalt(saltRounds);
+  const hash = await bcrypt.hash(plainPassword, salt);
   return hash;
 }
+
 interface SalesDetail {
   productId: string;
   sellingPrice: number;
   quantitySold: number;
 }
 
+// Fetch product details and calculate the total amount
 const fetchProductDetailsAndCalculateTotalAmount = async (salesDetails: SalesDetail[]) => {
-  // Extract product IDs from salesDetails
   const productIds = salesDetails.map(detail => detail.productId);
 
-  // Fetch products for each productId in salesDetails
   const fetchedProducts = await prisma.product.findMany({
     where: {
       productId: { in: productIds },
@@ -32,13 +33,11 @@ const fetchProductDetailsAndCalculateTotalAmount = async (salesDetails: SalesDet
     },
   });
 
-  // Create a map of productId to fetched product details
   const productIdToProductDetails = fetchedProducts.reduce((map, product) => {
     map[product.productId] = product;
     return map;
   }, {} as Record<string, { offerPrice: number; customerId: string }>);
 
-  // Calculate the total amount based on the offer prices and quantities sold
   const totalAmount = salesDetails.reduce((total, detail) => {
     const productDetails = productIdToProductDetails[detail.productId];
     return total + productDetails.offerPrice * detail.quantitySold;
@@ -47,37 +46,74 @@ const fetchProductDetailsAndCalculateTotalAmount = async (salesDetails: SalesDet
   return totalAmount;
 };
 
-// In your resolvers file
+// GraphQL Queries
 const queries = {
+  customer: async (_: any, { userId }: { userId: string }) => {
+    try {
+      const customer = await prisma.customer.findUnique({
+        where: { customerId: userId },
+      });
+
+      if (!customer) {
+        throw new Error("Customer not found");
+      }
+
+      return customer;
+    } catch (error) {
+      console.error("Error fetching customer:", error);
+      throw new Error("Unable to fetch customer");
+    }
+  },
+
   customers: async (_: any, __: any, { user }: any) => {
     if (!user) throw new Error("Not authenticated");
     return await prisma.customer.findMany({
       where: { customerId: user.userId },
     });
   },
+
   products: async (_: any, __: any, { user }: any) => {
     if (!user) throw new Error("Not authenticated");
     return await prisma.product.findMany({
       where: { customerId: user.userId },
     });
   },
+
   sales: async (_: any, __: any, { user }: any) => {
     if (!user) throw new Error("Not authenticated");
     return await prisma.sale.findMany({
       where: { customerId: user.userId },
     });
   },
+
   validateToken: async (_: any, { token }: { token: string }) => {
     try {
-      const decoded = jwt.verify(token, jwtsecret);
+      const decoded = jwt.verify(token, jwtsecret) as { userId: string };
+      
+      const customer = await prisma.customer.findUnique({
+        where: { customerId: decoded.userId },
+      });
+
+      // Handle the case where the user does not exist
+      if (!customer) {
+        return {
+          valid: false,
+          message: "Token is valid, but customer does not exist",
+          user: null,  // Ensure `user` is null if customer does not exist
+        };
+      }
+
       return {
         valid: true,
         message: "Token is valid",
+        user: customer,
       };
     } catch (error) {
+      console.error("Error validating token:", error);
       return {
         valid: false,
         message: "Token is invalid",
+        user: null,  // Ensure `user` is null if token is invalid
       };
     }
   },
@@ -87,11 +123,6 @@ enum Gender {
   MALE = "MALE",
   FEMALE = "FEMALE",
   PREFER_NOT_TO_SAY = "PREFER_NOT_TO_SAY",
-}
-
-enum SaleType {
-  BUY,
-  SALE,
 }
 
 const mutations = {
@@ -124,43 +155,45 @@ const mutations = {
   
       return { token, customer: customerWithoutPassword, message: "Registration successful" };
     } catch (error) {
-      console.error("Error creating customer: ", error);
+      console.error("Error creating customer:", error);
       throw new Error("Unable to create customer");
     }
-  }
-  
-  
-,  
+  },
 
   login: async (
     _: any,
     { email, password }: { email: string; password: string },
     context: any
   ) => {
-    const user = await prisma.customer.findUnique({
-      where: { email },
-    });
+    try {
+      const user = await prisma.customer.findUnique({
+        where: { email },
+      });
 
-    if (!user) {
-      throw new Error("User not found");
+      if (!user) {
+        throw new Error("User not found");
+      }
+
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        throw new Error("Invalid password");
+      }
+
+      const token = jwt.sign({ userId: user.customerId }, jwtsecret, {
+        expiresIn: "1h",
+      });
+
+      context.res.cookie("token", token, {
+        httpOnly: true,
+        secure: process.env.NODE_ENV === "production",
+        maxAge: 3600000,
+      });
+
+      return { user, token, message: "Login successful" };
+    } catch (error) {
+      console.error("Error during login:", error);
+      throw new Error("Unable to login");
     }
-
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      throw new Error("Invalid password");
-    }
-
-    const token = jwt.sign({ userId: user.customerId }, jwtsecret, {
-      expiresIn: "1h",
-    });
-
-    context.res.cookie("token", token, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === "production",
-      maxAge: 3600000,
-    });
-
-    return { token, message: "Login successful" };
   },
 
   createProduct: async (
@@ -206,8 +239,7 @@ const mutations = {
     return await prisma.product.create({
       data: productData,
     });
-  }
-,  
+  },
 
   createPriceHistory: async (
     _: any,
@@ -244,58 +276,54 @@ const mutations = {
     if (!context.user) throw new Error("Not authenticated");
   
     const productIds = args.salesDetails.map(detail => detail.productId);
-  const fetchedProducts = await prisma.product.findMany({
-    where: {
-      productId: { in: productIds },
-    },
-    select: {
-      productId: true,
-      customerId: true,
-    },
-  });
-
-  // Create a map of productId to customerId
-  const productIdToCustomerId = fetchedProducts.reduce((map, product) => {
-    map[product.productId] = product.customerId;
-    return map;
-  }, {} as Record<string, string>);
-
-  // Check if all productIds have corresponding customerIds
-  const allCustomerIdsExist = args.salesDetails.every(detail =>
-    productIdToCustomerId.hasOwnProperty(detail.productId)
-  );
-  if (!allCustomerIdsExist) throw new Error("Some products do not have associated customerIds");
-
-  const totalAmountt = await fetchProductDetailsAndCalculateTotalAmount(args.salesDetails);
-  // Create the sale
-  const sale = await prisma.sale.create({
-    data: {
-      userId: args.userId,
-      totalAmount: totalAmountt,
-      cumulativeDiscount: args.cumulativeDiscount,
-      freightPrice: args.freightPrice,
-      storeId: args.storeId,
-      address: args.address,
-      customerId: productIdToCustomerId[args.salesDetails[0].productId], // Assuming all details have the same customerId
-      paymentType: args.paymentType,
-      saleType: args.saleType,
-      saleDate: new Date(),
-      salesDetails: {
-        create: args.salesDetails.map((detail) => ({
-          productId: detail.productId,
-          sellingPrice: detail.sellingPrice,
-          quantitySold: detail.quantitySold,// Associate customerId with each sale detail
-        })),
+    const fetchedProducts = await prisma.product.findMany({
+      where: {
+        productId: { in: productIds },
       },
-    },
-    include: {
-      salesDetails: true,
+      select: {
+        productId: true,
+        customerId: true,
+      },
+    });
+
+    const productIdToCustomerId = fetchedProducts.reduce((map, product) => {
+      map[product.productId] = product.customerId;
+      return map;
+    }, {} as Record<string, string>);
+
+    const allCustomerIdsExist = args.salesDetails.every(detail =>
+      productIdToCustomerId.hasOwnProperty(detail.productId)
+    );
+    if (!allCustomerIdsExist) throw new Error("Some products do not have associated customerIds");
+
+    const totalAmount = await fetchProductDetailsAndCalculateTotalAmount(args.salesDetails);
+    const sale = await prisma.sale.create({
+      data: {
+        userId: args.userId,
+        totalAmount: totalAmount,
+        cumulativeDiscount: args.cumulativeDiscount,
+        freightPrice: args.freightPrice,
+        storeId: args.storeId,
+        address: args.address,
+        customerId: productIdToCustomerId[args.salesDetails[0].productId], // Assuming all details have the same customerId
+        paymentType: args.paymentType,
+        saleType: args.saleType,
+        saleDate: new Date(),
+        salesDetails: {
+          create: args.salesDetails.map((detail) => ({
+            productId: detail.productId,
+            sellingPrice: detail.sellingPrice,
+            quantitySold: detail.quantitySold,
+          })),
+        },
+      },
+      include: {
+        salesDetails: true,
       },
     });
   
     return sale;
   },
-  
 
   createCompetitorPrice: async (
     parent: any,
